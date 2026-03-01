@@ -1,0 +1,99 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# ---------------------------------------------------------
+# 1. Load Data
+# ---------------------------------------------------------
+# 'latin1' handles specific special characters common in text files
+df = pd.read_csv('IMDb Movies India.csv', encoding='latin1')
+
+# ---------------------------------------------------------
+# 2. Data Cleaning & Preprocessing
+# ---------------------------------------------------------
+# A rating prediction model can only train on rows that actually have a rating
+df = df.dropna(subset=['Rating'])
+
+# Clean numeric columns containing text (e.g. "(2019)" -> 2019, "109 min" -> 109, "1,000" -> 1000)
+df['Year'] = df['Year'].astype(str).str.extract(r'(\d+)').astype(float)
+df['Duration'] = df['Duration'].astype(str).str.extract(r'(\d+)').astype(float)
+df['Votes'] = df['Votes'].astype(str).str.replace(',', '').str.extract(r'(\d+)').astype(float)
+
+# Drop missing values in the most crucial columns
+df = df.dropna(subset=['Year', 'Duration', 'Votes', 'Genre', 'Director', 'Actor 1'])
+
+# Fill remaining NaNs for secondary actors
+df['Actor 2'] = df['Actor 2'].fillna('Unknown')
+df['Actor 3'] = df['Actor 3'].fillna('Unknown')
+
+# Drop the 'Name' column as text titles aren't useful for this specific model type
+df = df.drop(columns=['Name'])
+
+# ---------------------------------------------------------
+# 3. Train-Test Split (Crucial step before Encoding)
+# ---------------------------------------------------------
+# Separate the predictors (X) from the target variable (y)
+X = df.drop(columns=['Rating'])
+y = df['Rating']
+
+# Split 80% for training and 20% for testing
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# ---------------------------------------------------------
+# 4. Feature Engineering: Target Encoding
+# ---------------------------------------------------------
+# Convert high-cardinality text columns (like Directors/Actors) into numeric values
+# based on their average rating. This MUST be calculated on X_train only to prevent data leakage.
+categorical_cols = ['Genre', 'Director', 'Actor 1', 'Actor 2', 'Actor 3']
+overall_mean = y_train.mean() # Default value for unseen categories
+
+for col in categorical_cols:
+    # Calculate mean rating for each category ONLY using the training set
+    mean_target = y_train.groupby(X_train[col]).mean()
+    
+    # Map the calculated averages back to both Train and Test sets
+    X_train[col] = X_train[col].map(mean_target)
+    X_test[col] = X_test[col].map(mean_target)
+    
+    # If the Test set has a new Actor/Director not seen in training, fill with the overall mean
+    X_train[col] = X_train[col].fillna(overall_mean)
+    X_test[col] = X_test[col].fillna(overall_mean)
+
+# ---------------------------------------------------------
+# 5. Model Training
+# ---------------------------------------------------------
+# Initialize a Random Forest Regressor 
+# (max_depth is set to prevent the model from overfitting on noisy data)
+model = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10)
+
+# Train the model on the training data
+model.fit(X_train, y_train)
+
+# ---------------------------------------------------------
+# 6. Model Evaluation
+# ---------------------------------------------------------
+# Predict on the unseen Test data
+y_pred = model.predict(X_test)
+
+# Calculate accuracy metrics
+mae = mean_absolute_error(y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+r2 = r2_score(y_test, y_pred)
+
+print("=== Model Performance ===")
+print(f"Mean Absolute Error (MAE): {mae:.2f} stars")
+print(f"Root Mean Squared Error (RMSE): {rmse:.2f} stars")
+print(f"R-squared (R2) Score: {r2:.2f}")
+
+# ---------------------------------------------------------
+# 7. Feature Importance Analysis
+# ---------------------------------------------------------
+feature_importance = pd.DataFrame({
+    'Feature': X.columns,
+    'Importance': model.feature_importances_
+}).sort_values(by='Importance', ascending=False)
+
+print("\n=== Feature Importance ===")
+print(feature_importance)
